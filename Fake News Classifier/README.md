@@ -8,7 +8,13 @@ This folder contains utilities to train and run a BERT-based classifier for fake
 
 ## Training
 
-Use `trainer.py` to train the model. The script performs a small hyperparameter search using the Hugging Face `Trainer` and stores the best model together with logs and plots in `Results/`.
+Install the required Python packages first:
+
+```bash
+pip install -r requirements.txt
+```
+
+Then run `trainer.py` to train the model. The script performs a small hyperparameter search using the Hugging Face `Trainer` and stores the best model together with logs and plots in `Results/`.
 
 ```bash
 python trainer.py
