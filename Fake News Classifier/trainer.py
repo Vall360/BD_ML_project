@@ -35,7 +35,7 @@ def load_datasets():
 
 
 TOKENIZER_NAME = 'bert-base-uncased'
-tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
+tokenizer = None
 
 # Limit the number of processes used during preprocessing to avoid excessive
 # memory usage on systems with limited RAM (e.g. 16GB on Mac M2).
@@ -65,10 +65,15 @@ def model_init():
 
 
 def main(run_optuna: bool = True):
+    global tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
     train_ds, eval_ds, test_ds = load_datasets()
-    train_ds = train_ds.map(tokenize, batched=True, num_proc=NUM_PROC)
-    eval_ds = eval_ds.map(tokenize, batched=True, num_proc=NUM_PROC)
-    test_ds = test_ds.map(tokenize, batched=True, num_proc=NUM_PROC)
+    train_ds = train_ds.map(tokenize, batched=True, num_proc=NUM_PROC,
+                            desc="Tokenizing train dataset")
+    eval_ds = eval_ds.map(tokenize, batched=True, num_proc=NUM_PROC,
+                          desc="Tokenizing eval dataset")
+    test_ds = test_ds.map(tokenize, batched=True, num_proc=NUM_PROC,
+                          desc="Tokenizing test dataset")
 
     data_collator = DataCollatorWithPadding(tokenizer)
 
@@ -82,6 +87,7 @@ def main(run_optuna: bool = True):
         per_device_train_batch_size=16,
         per_device_eval_batch_size=16,
         dataloader_num_workers=NUM_PROC,
+        disable_tqdm=False,
     )
 
     trainer = Trainer(

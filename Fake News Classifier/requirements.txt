@@ -6,3 +6,4 @@ matplotlib
 scikit-learn
 accelerate
 optuna
+urllib3<2

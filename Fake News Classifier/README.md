@@ -14,6 +14,11 @@ Install the required Python packages first:
 pip install -r requirements.txt
 ```
 
+If your Python build uses an SSL library older than OpenSSL 1.1.1 (for example
+LibreSSL on macOS), you should keep `urllib3` below version 2.0. The provided
+`requirements.txt` already pins `urllib3<2` to avoid SSL errors when downloading
+models from Hugging Face.
+
 Then run `trainer.py` to train the model. The script tokenizes the dataset in parallel using all available CPU cores. By default it performs a short hyperparameter search (two trials) with Optuna through the Hugging Face `Trainer`. The best model together with logs and plots will be stored in `Results/`. Pass `--no-optuna` to skip the hyperparameter search and train directly with the default settings.
 
 ```bash
