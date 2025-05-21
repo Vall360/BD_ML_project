@@ -1,6 +1,8 @@
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
+import multiprocessing
+import argparse
 from datasets import Dataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from transformers import (AutoTokenizer, AutoModelForSequenceClassification,
@@ -30,6 +32,10 @@ def load_datasets():
 TOKENIZER_NAME = 'bert-base-uncased'
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
 
+# Limit the number of processes used during preprocessing to avoid excessive
+# memory usage on systems with limited RAM (e.g. 16GB on Mac M2).
+NUM_PROC = max(1, min(4, multiprocessing.cpu_count()))
+
 
 def tokenize(batch):
     return tokenizer(batch['text'], truncation=True)
@@ -54,20 +60,37 @@ def model_init():
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Train fake news classifier")
+    parser.add_argument(
+        "--search",
+        action="store_true",
+        help="run Optuna hyperparameter search before training",
+    )
+    parser.add_argument(
+        "--trials",
+        type=int,
+        default=2,
+        help="number of Optuna trials when --search is enabled",
+    )
+    args = parser.parse_args()
+
     train_ds, eval_ds, test_ds = load_datasets()
-    train_ds = train_ds.map(tokenize, batched=True)
-    eval_ds = eval_ds.map(tokenize, batched=True)
-    test_ds = test_ds.map(tokenize, batched=True)
+    train_ds = train_ds.map(tokenize, batched=True, num_proc=NUM_PROC)
+    eval_ds = eval_ds.map(tokenize, batched=True, num_proc=NUM_PROC)
+    test_ds = test_ds.map(tokenize, batched=True, num_proc=NUM_PROC)
 
     data_collator = DataCollatorWithPadding(tokenizer)
 
     training_args = TrainingArguments(
         output_dir=RESULTS_DIR,
-        eval_strategy='epoch',
+        evaluation_strategy='epoch',
         save_strategy='epoch',
         logging_strategy='epoch',
         load_best_model_at_end=True,
         metric_for_best_model='f1',
+        per_device_train_batch_size=16,
+        per_device_eval_batch_size=16,
+        dataloader_num_workers=NUM_PROC,
     )
 
     trainer = Trainer(
@@ -75,21 +98,26 @@ def main():
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
 
-    def hp_space(trial):
-        return {
-            'learning_rate': trial.suggest_float('learning_rate', 2e-5, 5e-5, log=True),
-            'num_train_epochs': trial.suggest_int('num_train_epochs', 2, 4),
-            'per_device_train_batch_size': trial.suggest_categorical('per_device_train_batch_size', [8, 16]),
-        }
+    if args.search:
+        def hp_space(trial):
+            return {
+                'learning_rate': trial.suggest_float('learning_rate', 2e-5, 5e-5, log=True),
+                'num_train_epochs': trial.suggest_int('num_train_epochs', 2, 4),
+                'per_device_train_batch_size': trial.suggest_categorical('per_device_train_batch_size', [16, 32]),
+            }
 
-    best_run = trainer.hyperparameter_search(direction='maximize', hp_space=hp_space, n_trials=5)
-    for n, v in best_run.hyperparameters.items():
-        setattr(trainer.args, n, v)
+        best_run = trainer.hyperparameter_search(
+            direction='maximize',
+            hp_space=hp_space,
+            n_trials=args.trials,
+            compute_objective=lambda metrics: metrics.get('eval_f1', 0.0),
+        )
+        for n, v in best_run.hyperparameters.items():
+            setattr(trainer.args, n, v)
 
     trainer.train()
     trainer.save_model(MODEL_DIR)
