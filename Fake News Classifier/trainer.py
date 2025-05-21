@@ -63,7 +63,7 @@ def main():
 
     training_args = TrainingArguments(
         output_dir=RESULTS_DIR,
-        evaluation_strategy='epoch',
+        eval_strategy='epoch',
         save_strategy='epoch',
         logging_strategy='epoch',
         load_best_model_at_end=True,
