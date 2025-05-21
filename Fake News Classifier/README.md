@@ -14,14 +14,10 @@ Install the required Python packages first:
 pip install -r requirements.txt
 ```
 
-Run `trainer.py` to train the model. By default it tokenizes the dataset in parallel using all available CPU cores and trains with the preset hyperparameters. Pass the `--search` flag to perform a short Optuna hyperparameter search (two trials by default). The best model together with logs and plots will be stored in `Results/`.
+Then run `trainer.py` to train the model. The script tokenizes the dataset in parallel using all available CPU cores and runs a short hyperparameter search (two trials) with the Hugging Face `Trainer`. The best model together with logs and plots will be stored in `Results/`.
 
 ```bash
-# basic training
 python trainer.py
-
-# with hyperparameter search
-python trainer.py --search
 ```
 
 Outputs generated in `Results/`:
@@ -31,7 +27,8 @@ Outputs generated in `Results/`:
 - `test_metrics.csv` – metrics on the test split
 - `*.png` – graphs of loss and metrics per epoch
 
-On an Apple M2 with 16 GB RAM the full training with the default two-trial search finishes in roughly four hours. Skipping the search is faster but may produce slightly lower accuracy.
+On an Apple M2 with 16 GB RAM the full training (including hyperparameter search)
+finishes in roughly four hours.
 
 ## Inference
 
