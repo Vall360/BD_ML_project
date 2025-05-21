@@ -14,7 +14,9 @@ Install the required Python packages first:
 pip install -r requirements.txt
 ```
 
+
 Run `trainer.py` to train the model. By default the script trains once using preset hyperparameters. Pass `--search` to run an Optuna hyperparameter search (two trials by default). Tokenization uses multiple CPU cores and all results are stored in `Results/`.
+
 
 ```bash
 python trainer.py
@@ -33,7 +35,9 @@ Outputs generated in `Results/`:
 - `test_metrics.csv` – metrics on the test split
 - `*.png` – graphs of loss and metrics per epoch
 
+
 On an Apple M2 with 16 GB RAM the base training run finishes in roughly four hours. Running a hyperparameter search will take proportionally longer depending on the number of trials.
+
 
 ## Inference
 

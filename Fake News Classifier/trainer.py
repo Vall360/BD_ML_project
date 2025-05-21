@@ -2,7 +2,9 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import multiprocessing
+
 import argparse
+
 from datasets import Dataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from transformers import (AutoTokenizer, AutoModelForSequenceClassification,
@@ -111,6 +113,7 @@ def main(args):
             'per_device_train_batch_size': trial.suggest_categorical('per_device_train_batch_size', [16, 32]),
         }
 
+
     if args.search:
         best_run = trainer.hyperparameter_search(
             direction='maximize',
@@ -120,6 +123,7 @@ def main(args):
         )
         for n, v in best_run.hyperparameters.items():
             setattr(trainer.args, n, v)
+
 
     trainer.train()
     trainer.save_model(MODEL_DIR)
