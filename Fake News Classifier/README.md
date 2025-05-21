@@ -14,10 +14,12 @@ Install the required Python packages first:
 pip install -r requirements.txt
 ```
 
-Then run `trainer.py` to train the model. The script tokenizes the dataset in parallel using all available CPU cores and runs a short hyperparameter search (two trials) with the Hugging Face `Trainer`. The best model together with logs and plots will be stored in `Results/`.
+Then run `trainer.py` to train the model. The script tokenizes the dataset in parallel using all available CPU cores. By default it performs a short hyperparameter search (two trials) with Optuna through the Hugging Face `Trainer`. The best model together with logs and plots will be stored in `Results/`. Pass `--no-optuna` to skip the hyperparameter search and train directly with the default settings.
 
 ```bash
 python trainer.py
+# or to skip the hyperparameter search
+python trainer.py --no-optuna
 ```
 
 Outputs generated in `Results/`:

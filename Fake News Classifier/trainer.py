@@ -2,10 +2,16 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import multiprocessing
+import argparse
 from datasets import Dataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
-from transformers import (AutoTokenizer, AutoModelForSequenceClassification,
-                          Trainer, TrainingArguments, DataCollatorWithPadding)
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    Trainer,
+    TrainingArguments,
+    DataCollatorWithPadding,
+)
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'Train Data')
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), 'Results')
@@ -58,7 +64,7 @@ def model_init():
 
 
 
-def main():
+def main(run_optuna: bool = True):
     train_ds, eval_ds, test_ds = load_datasets()
     train_ds = train_ds.map(tokenize, batched=True, num_proc=NUM_PROC)
     eval_ds = eval_ds.map(tokenize, batched=True, num_proc=NUM_PROC)
@@ -87,21 +93,22 @@ def main():
         compute_metrics=compute_metrics,
     )
 
-    def hp_space(trial):
-        return {
-            'learning_rate': trial.suggest_float('learning_rate', 2e-5, 5e-5, log=True),
-            'num_train_epochs': trial.suggest_int('num_train_epochs', 2, 4),
-            'per_device_train_batch_size': trial.suggest_categorical('per_device_train_batch_size', [16, 32]),
-        }
+    if run_optuna:
+        def hp_space(trial):
+            return {
+                'learning_rate': trial.suggest_float('learning_rate', 2e-5, 5e-5, log=True),
+                'num_train_epochs': trial.suggest_int('num_train_epochs', 2, 4),
+                'per_device_train_batch_size': trial.suggest_categorical('per_device_train_batch_size', [16, 32]),
+            }
 
-    best_run = trainer.hyperparameter_search(
-        direction='maximize',
-        hp_space=hp_space,
-        n_trials=2,
-        compute_objective=lambda metrics: metrics.get('eval_f1', 0.0),
-    )
-    for n, v in best_run.hyperparameters.items():
-        setattr(trainer.args, n, v)
+        best_run = trainer.hyperparameter_search(
+            direction='maximize',
+            hp_space=hp_space,
+            n_trials=2,
+            compute_objective=lambda metrics: metrics.get('eval_f1', 0.0),
+        )
+        for n, v in best_run.hyperparameters.items():
+            setattr(trainer.args, n, v)
 
     trainer.train()
     trainer.save_model(MODEL_DIR)
@@ -133,4 +140,20 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Train fake news classifier')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        '--optuna',
+        dest='run_optuna',
+        action='store_true',
+        help='run Optuna hyperparameter search (default)',
+    )
+    group.add_argument(
+        '--no-optuna',
+        dest='run_optuna',
+        action='store_false',
+        help='skip Optuna hyperparameter search',
+    )
+    parser.set_defaults(run_optuna=True)
+    args = parser.parse_args()
+    main(run_optuna=args.run_optuna)
