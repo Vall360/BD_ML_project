@@ -1,0 +1,6 @@
+transformers>=4.30
+datasets
+torch
+pandas
+matplotlib
+scikit-learn
