@@ -37,6 +37,7 @@ tqdm.pandas()
 BASE_DIR = Path(__file__).resolve().parent
 NEWS_DATA_PATH = BASE_DIR / "News_dataset.csv"
 BERT_RESULTS_PATH = BASE_DIR / "BERT_project_results.csv"
+BERT_OHE_PATH = BASE_DIR / "BERT_project_OHE.csv"
 SYMBOL_LIST_PATH = BASE_DIR / "symbol_list_selected.csv"
 
 
@@ -430,6 +431,11 @@ class ML_build:
         self.df_news = pd.read_csv(path, low_memory=False, nrows=nrows)
         self.df_news["Date"] = pd.to_datetime(self.df_news["Date"])
 
+    def save_OHE(self, path: Path = BERT_OHE_PATH) -> None:
+        if self.df_news is None:
+            raise RuntimeError("News dataframe is not initialised. Call news_df first.")
+        self.df_news.to_csv(path, index=False)
+
     # ------------------------------------------------------------------
     # Date adjustments
     # ------------------------------------------------------------------
@@ -491,7 +497,7 @@ class ML_build:
     # ------------------------------------------------------------------
     # Stock market data
     # ------------------------------------------------------------------
-    def import_stock_data(self, period: str = "4y") -> None:
+    def import_stock_data(self, period: str = "6y") -> None:
         if self.df_news is None:
             raise RuntimeError("News dataframe is not initialised. Call news_df first.")
 
@@ -500,6 +506,9 @@ class ML_build:
             raise RuntimeError("No companies found in news dataframe.")
 
         sp500 = yf.Ticker("^GSPC").history(period=period)
+        sp500 = pd.DataFrame(sp500)
+        if sp500.empty:
+            raise RuntimeError("Failed to download S&P500 history from yfinance.")
         sp500["Returns"] = (sp500.Close - sp500.Open) / sp500.Open
         sp500 = sp500.reset_index()
         sp500["Date"] = pd.to_datetime(sp500["Date"]).dt.date
@@ -510,6 +519,9 @@ class ML_build:
         for comp in companies:
             ticker = yf.Ticker(comp)
             hist = ticker.history(period=period)
+            if hist.empty:
+                print(f"[import_stock_data] No price data found for {comp}; skipping.")
+                continue
             hist = hist.reset_index()
             hist["Date"] = pd.to_datetime(hist["Date"]).dt.date
             hist["symbol"] = comp
@@ -523,6 +535,8 @@ class ML_build:
             frames.append(hist)
 
         stock_data = _safe_concat(frames)
+        if stock_data.empty:
+            raise RuntimeError("Stock price data download resulted in an empty dataframe.")
         stock_data = stock_data.merge(sp500, on="Date", how="left", suffixes=("", "_index"))
         stock_data = stock_data.rename(columns={"SP500_returns_index": "SP500_returns"})
         self.df_stock = stock_data
@@ -545,22 +559,46 @@ class ML_build:
 
     def _get_surprise_percent(self, ticker: yf.Ticker, dates: pd.Series) -> pd.Series:
         try:
-            earnings = ticker.get_earnings_dates(limit=64).reset_index()
+            earnings_raw = ticker.get_earnings_dates(limit=64)
         except Exception:
-            earnings = pd.DataFrame(columns=["index", "Surprise(%)"])
+            earnings_raw = None
+
+        if earnings_raw is None:
+            return pd.Series(np.nan, index=dates.index)
+
+        earnings = pd.DataFrame(earnings_raw).copy()
         if earnings.empty:
             return pd.Series(np.nan, index=dates.index)
+
+        if not isinstance(earnings.index, pd.RangeIndex):
+            earnings = earnings.reset_index()
+
+        date_col = None
+        for col in earnings.columns:
+            if "date" in str(col).lower():
+                date_col = col
+                break
+        if date_col is None and "index" in earnings.columns:
+            date_col = "index"
+        if date_col is None:
+            earnings.insert(0, "Date", earnings.index)
+            date_col = "Date"
+
         surprise_col = None
         for col in earnings.columns:
-            if "surprise" in col.lower():
+            if "surprise" in str(col).lower():
                 surprise_col = col
                 break
+
         if surprise_col is None:
             return pd.Series(np.nan, index=dates.index)
-        earnings = earnings.rename(columns={"index": "Date", surprise_col: "surprise_percent"})
+
+        earnings = earnings.rename(columns={date_col: "Date", surprise_col: "surprise_percent"})
         earnings["Date"] = pd.to_datetime(earnings["Date"]).dt.date
-        merger = pd.DataFrame({"Date": dates})
-        merged = merger.merge(earnings[["Date", "surprise_percent"]], on="Date", how="left")
+        earnings = earnings[["Date", "surprise_percent"]]
+
+        merger = pd.DataFrame({"Date": pd.to_datetime(dates).dt.date})
+        merged = merger.merge(earnings, on="Date", how="left")
         return merged["surprise_percent"]
 
     # ------------------------------------------------------------------
@@ -644,30 +682,31 @@ class ML_build:
         df = df.drop(columns=drop_cols)
         self.df = df
 
-    def Beta_calculation(self) -> None:
+    def Beta_calculation(self, window: int = 120, stock_col: str = "Returns", market_col: str = "SP500_returns") -> None:
         if self.df_stock is None:
             raise RuntimeError("Stock dataframe is not initialised. Call import_stock_data first.")
+        df = self.df_stock.copy().sort_values(["symbol", "Date"])
+        df["beta"] = np.nan
+        df["expected_return"] = np.nan
+        df["ar"] = np.nan
 
-        import statsmodels.api as sm
+        for symbol, group in df.groupby("symbol"):
+            group = group.sort_values("Date").copy()
+            returns = group[stock_col]
+            market = group[market_col]
 
-        frames: List[pd.DataFrame] = []
-        for symbol, group in self.df_stock.groupby("symbol"):
-            group = group.dropna(subset=["Returns", "SP500_returns"])
-            if group.empty:
-                continue
-            X = sm.add_constant(group["SP500_returns"])
-            model = sm.OLS(group["Returns"], X).fit()
-            expected = model.predict(X)
-            group = group.copy()
-            group["beta"] = model.params.get("SP500_returns", np.nan)
-            group["alpha"] = model.params.get("const", np.nan)
-            group["expected_return"] = expected
-            group["ar"] = group["Returns"] - expected
-            frames.append(group)
-        if frames:
-            self.df_stock = pd.concat(frames, ignore_index=True)
-        else:
-            self.df_stock["ar"] = np.nan
+            covariance = returns.rolling(window, min_periods=10).cov(market)
+            variance = market.rolling(window, min_periods=10).var()
+            beta = (covariance / variance).replace([np.inf, -np.inf], np.nan)
+
+            model_return = beta * market
+            abnormal = (returns.to_numpy() - model_return.to_numpy()) * 100
+
+            df.loc[group.index, "beta"] = beta.to_numpy()
+            df.loc[group.index, "expected_return"] = model_return.to_numpy()
+            df.loc[group.index, "ar"] = abnormal
+
+        self.df_stock = df
 
     def prepare_news_df(self) -> pd.DataFrame:
         if self.df_stock is None:
@@ -675,46 +714,78 @@ class ML_build:
         if self.df_news is None:
             raise RuntimeError("News dataframe is not initialised. Call news_df first.")
 
-        df_news = self.df_news.copy()
-        df_news["Date"] = pd.to_datetime(df_news["Date"]).dt.date
-        aggregations = {
-            "positive": "sum",
-            "negative": "sum",
-            "neutral": "sum",
-            "LABEL_0": "sum",
-            "LABEL_1": "sum",
-            "positive*Label_1": "sum",
-            "negative*Label_1": "sum",
-        }
-        grouped = df_news.groupby(["Company", "Date"]).agg(aggregations).reset_index()
-        grouped = grouped.rename(columns={
-            "positive*Label_1": "positive_label_1",
-            "negative*Label_1": "negative_label_1",
-        })
-        grouped["positive_label_0"] = grouped["positive"] - grouped["positive_label_1"]
-        grouped["negative_label_0"] = grouped["negative"] - grouped["negative_label_1"]
-        total = grouped[["positive", "negative", "neutral"]].sum(axis=1).replace(0, np.nan)
-        grouped["rel_pos_label_1"] = grouped["positive_label_1"] / total
-        grouped["rel_neg_label_1"] = grouped["negative_label_1"] / total
-        grouped["rel_pos_label_0"] = grouped["positive_label_0"] / total
-        grouped["rel_neg_label_0"] = grouped["negative_label_0"] / total
-        grouped = grouped.fillna(0.0)
-        grouped = grouped.drop(columns=["positive", "negative", "neutral"])
+        news = self.df_news.copy()
+        news["Date"] = pd.to_datetime(news["Date"], errors="coerce").dt.date
+        news = news.dropna(subset=["Date", "Company"])
+
+        base_columns = ["positive", "negative", "neutral", "LABEL_0", "LABEL_1", "positive*Label_1", "negative*Label_1"]
+        for col in base_columns:
+            if col not in news.columns:
+                news[col] = 0.0
+
+        aggregated = (
+            news
+            .groupby(["Company", "Date"], as_index=False)
+            .agg({
+                "positive": "sum",
+                "negative": "sum",
+                "neutral": "sum",
+                "LABEL_0": "sum",
+                "LABEL_1": "sum",
+                "positive*Label_1": "sum",
+                "negative*Label_1": "sum",
+            })
+        )
+
+        aggregated.rename(
+            columns={
+                "positive*Label_1": "positive_label_1",
+                "negative*Label_1": "negative_label_1",
+            },
+            inplace=True,
+        )
+
+        aggregated["positive_label_0"] = aggregated["positive"] - aggregated["positive_label_1"]
+        aggregated["negative_label_0"] = aggregated["negative"] - aggregated["negative_label_1"]
+
+        total_mentions = aggregated[["positive", "negative", "neutral"]].sum(axis=1)
+        total_mentions.replace(0, np.nan, inplace=True)
+
+        aggregated["rel_pos_label_1"] = aggregated["positive_label_1"] / total_mentions
+        aggregated["rel_neg_label_1"] = aggregated["negative_label_1"] / total_mentions
+        aggregated["rel_pos_label_0"] = aggregated["positive_label_0"] / total_mentions
+        aggregated["rel_neg_label_0"] = aggregated["negative_label_0"] / total_mentions
+        aggregated = aggregated.fillna(0.0)
 
         stock = self.df_stock.copy()
-        stock["Date"] = pd.to_datetime(stock["Date"]).dt.date
+        stock["Date"] = pd.to_datetime(stock["Date"], errors="coerce").dt.date
 
-        merged = stock.merge(grouped, left_on=["symbol", "Date"], right_on=["Company", "Date"], how="left")
-        merged = merged.rename(
-            columns={
-                "Dividends": "dividends",
-                "Volume": "volume",
-            }
+        merged = stock.merge(
+            aggregated,
+            left_on=["symbol", "Date"],
+            right_on=["Company", "Date"],
+            how="left",
         )
+
+        rename_map = {
+            "Dividends": "dividends",
+            "Volume": "volume",
+            "market_cap": "market_cap",
+            "Surprise(%)": "surprise_percent",
+        }
+        merged = merged.rename(columns=rename_map)
+
+        for column in ["dividends", "volume", "market_cap", "surprise_percent"]:
+            if column not in merged.columns:
+                merged[column] = 0.0
+
         if "ar" not in merged.columns:
-            merged["ar"] = merged["Returns"] - merged["SP500_returns"]
+            merged["ar"] = (merged.get("Returns", 0.0) - merged.get("SP500_returns", 0.0)) * 100
+
         merged["const"] = 1.0
-        keep = [
+        merged = merged.dropna(subset=["ar"])
+
+        keep_columns = [
             "symbol",
             "Date",
             "ar",
@@ -732,11 +803,10 @@ class ML_build:
             "rel_pos_label_0",
             "rel_neg_label_0",
         ]
-        available = [col for col in keep if col in merged.columns]
-        merged = merged[available]
-        merged = merged.dropna(subset=["ar"])
-        merged = merged.fillna(0.0)
+        available = [col for col in keep_columns if col in merged.columns]
+        merged = merged[available].fillna(0.0)
         merged = merged.set_index(["symbol", "Date"]).sort_index()
+
         self.model_run_final = merged
         return merged
 

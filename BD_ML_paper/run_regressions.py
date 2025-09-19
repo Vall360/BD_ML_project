@@ -14,6 +14,7 @@ from linearmodels.panel import PanelOLS
 from stargazer.stargazer import Stargazer
 
 from ml_pipeline import (
+    BERT_OHE_PATH,
     BERT_RESULTS_PATH,
     NEWS_DATA_PATH,
     ML_build,
@@ -42,20 +43,22 @@ def run_pipeline() -> pd.DataFrame:
 
     ml = ML_build()
     ml.news_df(news_df)
-    ml.load_BERT(BERT_RESULTS_PATH)
-    '''if BERT_RESULTS_PATH.exists():
-        ml.load_BERT(BERT_RESULTS_PATH)
+
+    if BERT_OHE_PATH.exists():
+        ml.load_BERT(BERT_OHE_PATH)
     else:
+        if BERT_RESULTS_PATH.exists():
+            ml.load_BERT(BERT_RESULTS_PATH)
+        else:
+            ml.data_preparation()
+            ml.BERT_sentiment_test()
+            ml.BERT_quality_test()
+            ml.BERT_NER_test()
+            ml.save_BERT(BERT_RESULTS_PATH)
         ml.data_preparation()
-        ml.BERT_sentiment_test()
-        ml.BERT_quality_test()
-        ml.BERT_NER_test()
-        ml.save_BERT(BERT_RESULTS_PATH)'''
+        ml.One_hot_encode(Interactions=True, OHE=False)
+        ml.save_OHE(BERT_OHE_PATH)
 
-    ## Raises an error + we already do it before BERT model results
-    ##ml.data_preparation()
-
-    ml.One_hot_encode(Interactions=True, OHE=False)
     ml.import_stock_data()
     ml.Beta_calculation()
 
