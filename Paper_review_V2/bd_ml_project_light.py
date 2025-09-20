@@ -14,20 +14,21 @@ BASE_DIR = Path(__file__).resolve().parent
 BERT_OHE_PATH = BASE_DIR / "BERT_project_OHE.csv"
 SOURCES_CLASS_PATH = BASE_DIR / "Sources_class.xlsx"
 DF_STOCK_PATH = BASE_DIR / "df_stock.csv"
+DF_STOCK_PATH_EXCEL = BASE_DIR / "df_stock.xlsx"
 REPORT_PATH = BASE_DIR / "Report0.html"
 
 
 def import_stock_data(news_df: pd.DataFrame) -> pd.DataFrame:
-  """Replicates the original stock download routine using Yahoo Finance data."""
+  """Download stock data for tickers present in the news dataframe."""
 
   companies = news_df["Company"].dropna().unique().tolist()
   stock_data = pd.DataFrame()
 
-  sp500 = yf.Ticker('^GSPC').history(period="6y")
+  sp500 = yf.Ticker('^GSPC').history(period="5y")
   sp500["Returns"] = (sp500.Close - sp500.Open) / sp500.Open
   sp500 = sp500.reset_index()
   sp500.loc[:, "Date"] = pd.to_datetime(sp500.loc[:, "Date"])
-  sp500["Date"] = sp500["Date"].dt.date
+  sp500['Date'] = sp500['Date'].dt.date
 
   for comp in companies:
     try:
@@ -44,6 +45,7 @@ def import_stock_data(news_df: pd.DataFrame) -> pd.DataFrame:
       if 'Diluted Average Shares' in stock_count.columns:
         stock_count = stock_count['Diluted Average Shares'].sort_index()
         stock_count = pd.DataFrame(stock_count)
+
         tol = pd.Timedelta('7 day')
         hist = pd.merge_asof(
             hist.sort_values('Date'),
@@ -71,9 +73,8 @@ def import_stock_data(news_df: pd.DataFrame) -> pd.DataFrame:
         print(f"Warning: earnings fetch failed for {comp}: {exc}")
 
       hist['symbol'] = comp
-      hist = pd.merge(hist, sp500[['Date', 'Returns']], how='left', on='Date')
-      hist.rename(columns={'Returns': 'SP500_returns'}, inplace=True)
-      hist['SP500_returns_yesterday'] = hist['SP500_returns'].shift(-1)
+      hist['SP500_returns'] = sp500["Returns"].values[:len(hist)] if len(sp500) >= len(hist) else sp500["Returns"].reindex(range(len(hist))).values
+      hist['SP500_returns_yesterday'] = sp500["Returns"].shift(-1).values[:len(hist)] if len(sp500) >= len(hist) else sp500["Returns"].shift(-1).reindex(range(len(hist))).values
 
       stock_data = pd.concat([stock_data, hist], ignore_index=True)
     except Exception as exc:  # pragma: no cover - best effort logging
@@ -215,9 +216,9 @@ def merge_stock_news(news_df: pd.DataFrame, stock_df: pd.DataFrame,
                       right_on=['Company', 'Date'],
                       how="left")
 
-  df_stock['Date'] = pd.to_datetime(df_stock['Date']).dt.date
-  df_stock = df_stock[df_stock['Date'] >= pd.to_datetime('2020-01-01').date()]
-  df_stock = df_stock[df_stock['Date'] <= pd.to_datetime('2023-09-01').date()]
+  print(df_stock)
+  df_stock = df_stock[df_stock['Date'] >= pd.to_datetime('2020-01-01').date() ]
+  df_stock = df_stock[df_stock['Date'] <= pd.to_datetime('2023-09-01').date() ]
 
   uncertainty_df = pd.DataFrame()
   for date in df_stock.Date.unique():
@@ -346,7 +347,7 @@ def run_regressions(model_run: tuple[pd.DataFrame, pd.DataFrame]) -> None:
                              .str.lower()
                              .str.replace('*', '_')
                              .str.replace('(%)', '_percent', regex=False))
-  print(model_run_final.head(10))
+
   formulas = [
       'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + EntityEffects',
       'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + positive_label_0 + EntityEffects',
@@ -379,18 +380,24 @@ def main() -> None:
 
   if DF_STOCK_PATH.exists():
     print(f"Loading existing stock file from {DF_STOCK_PATH}")
-    beta_df = pd.read_csv(DF_STOCK_PATH, low_memory=False)
+
+    stock_df = pd.read_csv(DF_STOCK_PATH, low_memory=False)
+    ##stock_df = import_stock_data(news_df)
+    beta_df, _ = beta_calculation(stock_df, window=30)
+
   else:
     print("Stock file not found. Downloading data from Yahoo Finance...")
     stock_df = import_stock_data(news_df)
+    stock_df.to_csv(DF_STOCK_PATH, index=False)
+    stock_df.to_excel(DF_STOCK_PATH_EXCEL) ##reserve save to debug do not delete
     beta_df, _ = beta_calculation(stock_df, window=30)
-    beta_df.to_csv(DF_STOCK_PATH, index=False)
-    print(f"Saved stock data to {DF_STOCK_PATH}")
+
 
   if 'Date' not in beta_df.columns:
     raise KeyError("Expected 'Date' column in df_stock.csv")
 
   beta_df['Date'] = pd.to_datetime(beta_df['Date'], errors='coerce').dt.date
+
   news_prepared, _ = prepare_news_df(news_df)
   model_run = merge_stock_news(news_prepared, beta_df, only_rel=False, no_events=False)
   run_regressions(model_run)
