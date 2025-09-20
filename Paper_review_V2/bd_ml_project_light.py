@@ -25,10 +25,19 @@ def import_stock_data(news_df: pd.DataFrame) -> pd.DataFrame:
   stock_data = pd.DataFrame()
 
   sp500 = yf.Ticker('^GSPC').history(period="5y")
-  sp500["Returns"] = (sp500.Close - sp500.Open) / sp500.Open
   sp500 = sp500.reset_index()
-  sp500.loc[:, "Date"] = pd.to_datetime(sp500.loc[:, "Date"])
-  sp500['Date'] = sp500['Date'].dt.date
+  sp500.loc[:, "Date"] = pd.to_datetime(sp500.loc[:, "Date"]).dt.date
+  sp500['SP500_returns'] = (sp500['Close'] - sp500['Open']) / sp500['Open']
+  sp500['SP500_returns_yesterday'] = sp500['SP500_returns'].shift(-1)
+  sp500 = sp500[['Date', 'SP500_returns', 'SP500_returns_yesterday']]
+
+  vix = yf.Ticker('^VIX').history(period="5y")
+  vix = vix.reset_index()
+  vix.loc[:, "Date"] = pd.to_datetime(vix.loc[:, "Date"]).dt.date
+  vix['VIX_close'] = vix['Close']
+  vix['VIX_returns'] = vix['VIX_close'].pct_change()
+  vix['VIX_returns_yesterday'] = vix['VIX_returns'].shift(-1)
+  vix = vix[['Date', 'VIX_close', 'VIX_returns', 'VIX_returns_yesterday']]
 
   for comp in companies:
     try:
@@ -72,9 +81,9 @@ def import_stock_data(news_df: pd.DataFrame) -> pd.DataFrame:
       except Exception as exc:  # pragma: no cover - best effort logging
         print(f"Warning: earnings fetch failed for {comp}: {exc}")
 
+      hist = hist.merge(sp500, on='Date', how='left')
+      hist = hist.merge(vix, on='Date', how='left')
       hist['symbol'] = comp
-      hist['SP500_returns'] = sp500["Returns"].values[:len(hist)] if len(sp500) >= len(hist) else sp500["Returns"].reindex(range(len(hist))).values
-      hist['SP500_returns_yesterday'] = sp500["Returns"].shift(-1).values[:len(hist)] if len(sp500) >= len(hist) else sp500["Returns"].shift(-1).reindex(range(len(hist))).values
 
       stock_data = pd.concat([stock_data, hist], ignore_index=True)
     except Exception as exc:  # pragma: no cover - best effort logging
@@ -265,7 +274,8 @@ def merge_stock_news(news_df: pd.DataFrame, stock_df: pd.DataFrame,
   if no_events:
     df_stock["Date"] = pd.to_datetime(df_stock["Date"])
     cols = ["Date", 'Volume', 'Dividends', 'Stock Splits', 'Market_Cap',
-            'SP500_returns', 'SP500_returns_yesterday', 'Returns', 'AR',
+            'SP500_returns', 'SP500_returns_yesterday', 'VIX_close',
+            'VIX_returns', 'VIX_returns_yesterday', 'Returns', 'AR',
             'EPS Estimate', 'Reported EPS', 'Surprise(%)', 'symbol',
             'positive*Label_1', 'negative*Label_1', 'positive*Label_0',
             'negative*Label_0', 'Uncert', 'Event_only_index',
@@ -274,7 +284,8 @@ def merge_stock_news(news_df: pd.DataFrame, stock_df: pd.DataFrame,
     model_run = df_stock[cols].groupby(['symbol', 'Date']).sum()
   else:
     cols = ['Date', 'Volume', 'Dividends', 'Stock Splits', 'Market_Cap',
-            'SP500_returns', 'SP500_returns_yesterday', 'Returns', 'AR',
+            'SP500_returns', 'SP500_returns_yesterday', 'VIX_close',
+            'VIX_returns', 'VIX_returns_yesterday', 'Returns', 'AR',
             'EPS Estimate', 'Reported EPS', 'Surprise(%)', 'symbol',
             'Event', 'Event_ID', 'positive*Label_1', 'negative*Label_1',
             'positive*Label_0', 'negative*Label_0', 'Uncert', 'Event_only_index',
