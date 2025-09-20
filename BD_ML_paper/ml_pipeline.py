@@ -28,6 +28,7 @@ from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.preprocessing import OneHotEncoder
 from tqdm import tqdm
 import yfinance as yf
+import scipy.stats as sci
 
 # The original notebook calls ``tqdm.pandas()`` globally to enable progress bars
 # for ``progress_apply``. We keep the same behaviour here.
@@ -682,30 +683,127 @@ class ML_build:
         df = df.drop(columns=drop_cols)
         self.df = df
 
-    def Beta_calculation(self, window: int = 120, stock_col: str = "Returns", market_col: str = "SP500_returns") -> None:
+    def Beta_calculation(
+        self,
+        window: int = 120,
+        stock_col: str = "Returns",
+        market_col: str = "SP500_returns",
+        est_window: int = 50,
+        event_window: int = 10,
+    ) -> None:
         if self.df_stock is None:
             raise RuntimeError("Stock dataframe is not initialised. Call import_stock_data first.")
-        df = self.df_stock.copy().sort_values(["symbol", "Date"])
-        df["beta"] = np.nan
-        df["expected_return"] = np.nan
-        df["ar"] = np.nan
 
-        for symbol, group in df.groupby("symbol"):
-            group = group.sort_values("Date").copy()
-            returns = group[stock_col]
-            market = group[market_col]
+        df = self.df_stock.copy()
+        if "symbol" not in df.columns or "Date" not in df.columns:
+            raise RuntimeError("Expected columns 'symbol' and 'Date' in stock dataframe.")
 
-            covariance = returns.rolling(window, min_periods=10).cov(market)
-            variance = market.rolling(window, min_periods=10).var()
-            beta = (covariance / variance).replace([np.inf, -np.inf], np.nan)
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
+        df = df.dropna(subset=["Date", "symbol"])
+        df = df.sort_values(["symbol", "Date"]).reset_index(drop=True)
 
-            model_return = beta * market
-            abnormal = (returns.to_numpy() - model_return.to_numpy()) * 100
+        for column in ["Beta", "AR", "AR_signif", "Event", "Event_ID", "expected_return"]:
+            if column not in df.columns:
+                df[column] = np.nan
 
-            df.loc[group.index, "beta"] = beta.to_numpy()
-            df.loc[group.index, "expected_return"] = model_return.to_numpy()
-            df.loc[group.index, "ar"] = abnormal
+        try:
+            risk_free = yf.Ticker("^IRX").history(period="6y")["Close"] * 0.01
+            risk_free = risk_free.reset_index()
+            risk_free["Date"] = pd.to_datetime(risk_free["Date"]).dt.date
+        except Exception:
+            risk_free = pd.DataFrame({"Date": [], "Close": []})
 
+        unique_id = 0
+        half_window = event_window // 2
+        surprise_col_candidates = ["Surprise(%)", "surprise_percent"]
+
+        df.set_index(["symbol", "Date"], inplace=True)
+
+        for symbol in df.index.get_level_values("symbol").unique():
+            unique_id = int(round(unique_id / 100.0)) * 100 + 100
+
+            sliced_full = df.loc[(symbol, slice(None)), :].copy()
+            sliced_full = sliced_full.reset_index()
+            sliced_full = sliced_full.sort_values("Date").reset_index(drop=True)
+
+            surprise_col = next((c for c in surprise_col_candidates if c in sliced_full.columns), None)
+            if surprise_col is None:
+                continue
+
+            event_indices = sliced_full.index[sliced_full[surprise_col].notna()].tolist()
+            if not event_indices:
+                continue
+
+            for event_idx in event_indices:
+                start_est = max(0, event_idx - half_window - est_window)
+                end_event = min(len(sliced_full), event_idx + half_window + 1)
+                est_slice = sliced_full.iloc[start_est : max(start_est + 1, event_idx - half_window)]
+
+                if est_slice.empty:
+                    continue
+
+                returns = est_slice.get(stock_col)
+                market = est_slice.get(market_col)
+                if isinstance(market, pd.DataFrame):
+                    market = market.iloc[:, 0]
+                if returns is None or market is None or len(returns) < 5:
+                    continue
+
+                covariance = returns.cov(market)
+                variance = market.var()
+                if variance is None or variance == 0 or np.isnan(variance):
+                    beta = np.nan
+                else:
+                    beta = covariance / variance
+
+                slice_window = sliced_full.iloc[start_est:end_event].copy()
+                slice_window["Beta"] = beta
+
+                market_window = slice_window.get(market_col)
+                if isinstance(market_window, pd.DataFrame):
+                    market_window = market_window.iloc[:, 0]
+                if market_window is None:
+                    market_window = pd.Series(0, index=slice_window.index)
+                model_return = beta * market_window
+                slice_window["model_ret"] = model_return
+                slice_window["AR"] = (slice_window.get(stock_col, 0) - model_return) * 100
+
+                critical_value = sci.norm.ppf(0.95)
+
+                def significance(value: float, crit: float) -> int:
+                    if pd.isna(value):
+                        return 0
+                    if value >= crit:
+                        return 1
+                    if value <= -crit:
+                        return 2
+                    return 0
+
+                slice_window["AR_signif"] = slice_window["AR"].apply(lambda x: significance(x, critical_value))
+
+                slice_window.loc[
+                    slice_window.index >= event_idx - half_window, "Event"
+                ] = 1
+                unique_id += 1
+                slice_window.loc[:, "Event_ID"] = unique_id
+
+                df.update(
+                    slice_window.set_index(["symbol", "Date"])[
+                        ["Beta", "model_ret", "AR", "AR_signif", "Event", "Event_ID"]
+                    ]
+                )
+
+        df.reset_index(inplace=True)
+        if "model_ret" in df.columns:
+            df.rename(columns={"model_ret": "expected_return"}, inplace=True)
+        else:
+            df["expected_return"] = np.nan
+
+        if "AR" in df.columns:
+            df["ar"] = df["AR"].fillna(0)
+        else:
+            df["AR"] = np.nan
+            df["ar"] = np.nan
         self.df_stock = df
 
     def prepare_news_df(self) -> pd.DataFrame:

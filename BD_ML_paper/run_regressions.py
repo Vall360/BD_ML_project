@@ -64,7 +64,9 @@ def run_pipeline() -> pd.DataFrame:
 
     model_run_final = ml.prepare_news_df()
     panel_df = ensure_datetime_index(model_run_final)
+    panel_df.to_excel("panel_df_debug")
     return panel_df
+
 
 
 def run_regressions(panel_df: pd.DataFrame) -> None:
