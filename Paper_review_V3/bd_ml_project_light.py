@@ -18,7 +18,38 @@ DF_STOCK_PATH = BASE_DIR / "df_stock.csv"
 DF_STOCK_PATH_EXCEL = BASE_DIR / "df_stock.xlsx"
 REPORT_PATH = BASE_DIR / "Report0.html"
 REPORT_SURPRISE_PATH = BASE_DIR / "Report_surprise.html"
+R_RESULTS_DIR = BASE_DIR / "R_results"
 ORIGINAL_PANEL = False
+
+R_DEFAULT_FORMULA = (
+  "ar ~ const + dividends + volume + market_cap + surprise_percent + "
+  "positive_label_1 + negative_label_1 + positive_label_0 + negative_label_0 + "
+  "surprise_percent * positive_label_1 + surprise_percent * negative_label_1 + "
+  "surprise_percent * positive_label_0 + surprise_percent * negative_label_0 - surprise_percent + EntityEffects"
+)
+
+try:
+  from r_panel_runner import run_r_panel_regression  # type: ignore
+  from rpy2.robjects.packages import importr  # type: ignore
+except ImportError as _R_IMPORT_ERROR:  # pragma: no cover - optional dependency
+  run_r_panel_regression = None
+  R_PANEL_IMPORT_ERROR = _R_IMPORT_ERROR
+  R_PACKAGE_CHECKER = None
+else:
+  R_PANEL_IMPORT_ERROR = None
+
+  def _missing_r_packages(packages: list[str]) -> list[str]:
+    missing: list[str] = []
+    for package in packages:
+      try:
+        importr(package)
+      except Exception:
+        missing.append(package)
+    return missing
+
+  R_PACKAGE_CHECKER = _missing_r_packages
+
+REQUIRED_R_PACKAGES = ["fixest", "broom"]
 
 def import_stock_data(news_df: pd.DataFrame) -> pd.DataFrame:
   """Download stock data for tickers present in the news dataframe."""
@@ -501,7 +532,7 @@ def prepare_panel_dataset(
 
 
 def run_regressions(model_run: tuple[pd.DataFrame, pd.DataFrame],
-                    event_id_whitelist: Set[float] | None = None) -> Set[float]:
+                    event_id_whitelist: Set[float] | None = None) -> tuple[pd.DataFrame, Set[float]]:
   try:
     import linearmodels as lm
   except ImportError as exc:  # pragma: no cover - user action required
@@ -514,11 +545,10 @@ def run_regressions(model_run: tuple[pd.DataFrame, pd.DataFrame],
       'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + positive_label_0 + EntityEffects',
       'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + negative_label_0 + EntityEffects',
       'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + positive_label_0 + negative_label_0 + EntityEffects',
-      'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + positive_label_0 + negative_label_0 + vix_close * positive_label_1 + vix_close * negative_label_1 + vix_close * positive_label_0 + vix_close * negative_label_0 - vix_close + EntityEffects '
-      ##'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + EntityEffects',
-      ##'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_pos_label_0 + EntityEffects',
-      ##'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_neg_label_0 + EntityEffects',
-      ##'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_pos_label_0 + rel_neg_label_0 + EntityEffects'
+      'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + EntityEffects',
+      'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_pos_label_0 + EntityEffects',
+      'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_neg_label_0 + EntityEffects',
+      'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_pos_label_0 + rel_neg_label_0 + EntityEffects',
   ]
 
   results = []
@@ -532,7 +562,7 @@ def run_regressions(model_run: tuple[pd.DataFrame, pd.DataFrame],
   report = Stargazer(results)
   REPORT_PATH.write_text(report.render_html())
   print(f"Panel regression report saved to {REPORT_PATH}")
-  return event_ids
+  return model_run_final, event_ids
 
 
 def run_regressions_suprise(model_run: tuple[pd.DataFrame, pd.DataFrame],
@@ -603,8 +633,28 @@ def main() -> None:
   model_run_ar = merge_stock_news(news_prepared, beta_df, only_rel=False, no_events=False)
   model_run_surprise = merge_stock_news(news_prepared, beta_df_surprise, only_rel=False,
                                         no_events=False, use_event_end_date=True)
-  ar_event_ids = run_regressions(model_run_ar)
+  panel_df_ar, ar_event_ids = run_regressions(model_run_ar)
   run_regressions_suprise(model_run_surprise, event_id_whitelist=ar_event_ids)
+
+  if run_r_panel_regression is None or R_PACKAGE_CHECKER is None:
+    if R_PANEL_IMPORT_ERROR is not None:
+      print(f"Skipping R regression stage: {R_PANEL_IMPORT_ERROR}")
+  else:
+    missing_packages = R_PACKAGE_CHECKER(REQUIRED_R_PACKAGES)
+    if missing_packages:
+      package_list = ", ".join(missing_packages)
+      install_hint = ", ".join(repr(pkg) for pkg in missing_packages)
+      print("Skipping R regression stage: missing required R packages -> "
+            f"{package_list}. Install in R with: install.packages(c({install_hint}))")
+      return
+    try:
+      panel_for_r = panel_df_ar.reset_index()
+      r_result = run_r_panel_regression(panel_for_r, R_DEFAULT_FORMULA,
+                                        R_RESULTS_DIR, model_name="ar_interactions")
+      print(f"R panel regression artefacts saved to {R_RESULTS_DIR}")
+      print(f"Summary stored at {r_result.summary_path}")
+    except Exception as exc:
+      print(f"R regression stage failed: {exc}")
 
 
 if __name__ == "__main__":
