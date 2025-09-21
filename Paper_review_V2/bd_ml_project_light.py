@@ -384,8 +384,6 @@ def run_regressions(model_run: tuple[pd.DataFrame, pd.DataFrame]) -> None:
     else:
       print(f"Panel size {len(model_run_final)} rows; no trimming applied")
 
-    model_run_final.set_index(['symbol', 'Event_only_index'], inplace=True)
-
   ORIGINAL_PANEL_V2 =True
   if ORIGINAL_PANEL_V2:
     dates = pd.read_excel("extracted_dates.xlsx", parse_dates=True)
@@ -459,16 +457,18 @@ def run_regressions(model_run: tuple[pd.DataFrame, pd.DataFrame]) -> None:
       remaining = [dt for grp in ref_groups[group_idx:] for dt in grp]
       return pdf, remaining
 
-    model_run_final, remaining_dates = flag_and_consume_dates(model_run_final.reset_index(), dates['date'].to_list())
+    model_run_final, remaining_dates = flag_and_consume_dates(
+        model_run_final.reset_index(),
+        dates['date'].to_list(),
+    )
     print(model_run_final, remaining_dates)
 
+    model_run_final = model_run_final[model_run_final['ORIG_DATE']].copy()
+    model_run_final.set_index(['symbol', 'event_only_index'], inplace=True)
+  else:
+    model_run_final.set_index(['symbol', 'event_only_index'], inplace=True)
 
   model_run_final.to_excel('df_for_models_debug.xlsx', index=False)
-
-  if ORIGINAL_PANEL_V2:
-    model_run_final = pd.DataFrame(model_run_final)
-    model_run_final = model_run_final[model_run_final['ORIG_DATE'] == True].copy()
-    model_run_final = model_run_final.set_index(['symbol', 'Event_only_index'], inplace=True)
 
   formulas = [
       'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + EntityEffects',
