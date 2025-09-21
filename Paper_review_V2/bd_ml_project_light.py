@@ -16,7 +16,7 @@ SOURCES_CLASS_PATH = BASE_DIR / "Sources_class.xlsx"
 DF_STOCK_PATH = BASE_DIR / "df_stock.csv"
 DF_STOCK_PATH_EXCEL = BASE_DIR / "df_stock.xlsx"
 REPORT_PATH = BASE_DIR / "Report0.html"
-
+ORIGINAL_PANEL = False
 
 def import_stock_data(news_df: pd.DataFrame) -> pd.DataFrame:
   """Download stock data for tickers present in the news dataframe."""
@@ -358,6 +358,99 @@ def run_regressions(model_run: tuple[pd.DataFrame, pd.DataFrame]) -> None:
                              .str.lower()
                              .str.replace('*', '_')
                              .str.replace('(%)', '_percent', regex=False))
+  if ORIGINAL_PANEL:
+    TARGET_OBSERVATIONS = 343
+    SYMBOL_WHITELIST = (
+      "QCOM", "ABT", "MS", "UPS", "CRM", "T", "NFLX", "VZ", "COST", "WFC",
+      "PEP", "MCD", "ACN", "CMCSA", "NKE", "MRK", "INTC", "ORCL", "PYPL", "TMO",
+      "SCHW", "LLY", "ADBE", "DHR", "TXN", "CVX", "ABBV", "AVGO", "JPM", "MA",
+      "V", "JNJ", "DIS", "AMZN", "AAPL", "GOOG", "HD", "PG", "MSFT",
+    )
+    symbols = SYMBOL_WHITELIST
+
+    print(model_run_final)
+    model_run_final.reset_index(inplace=True)
+    print(model_run_final)
+    ## Works good, keep for now
+    ##model_run_final[model_run_final['symbol'].isin(set(symbols))]
+
+    model_run_final = model_run_final[model_run_final['symbol'].isin(set(symbols))]
+    model_run_final.sort_values('date', inplace=True)
+
+    if len(model_run_final) > TARGET_OBSERVATIONS:
+      model_run_final = model_run_final.iloc[-TARGET_OBSERVATIONS:]
+      cut_date = model_run_final['date'].min()
+      print(f"Trimmed panel to {len(model_run_final)} rows starting from {cut_date}")
+    else:
+      print(f"Panel size {len(model_run_final)} rows; no trimming applied")
+
+    model_run_final.set_index(['symbol', 'Event_only_index'], inplace=True)
+
+  ORIGINAL_PANEL_V2 =True
+  if ORIGINAL_PANEL_V2:
+    dates = pd.read_excel("extracted_dates.xlsx", parse_dates=True)
+    print(dates)
+
+    from typing import List, Tuple
+
+    def flag_and_consume_dates(
+            panel_df: pd.DataFrame,
+            ref_dates: List[pd.Timestamp],
+            ticker_col: str = "symbol",
+            date_col: str = "date",
+            flag_col: str = "ORIG_DATE",
+    ) -> Tuple[pd.DataFrame, List[pd.Timestamp]]:
+      """
+      Iterate over a panel dataframe (by ticker, sorted by date). For each ticker:
+        - Scan the ticker's dates in ascending order.
+        - Maintain a pointer into ref_dates (also ascending).
+        - While scanning, if we see a ref_date < current panel date, we advance a *temp* pointer (these are "earlier dates").
+        - If we encounter matches (panel date == ref_date), we set flag=True for those rows and advance temp pointer.
+        - If a ticker had at least one match, we COMMIT the pointer advance (drop consumed/earlier dates) before moving to the next ticker.
+        - If a ticker had no matches, we DO NOT commit pointer advance; we leave the global pointer unchanged and proceed to the next ticker.
+
+      Returns:
+        - A copy of panel_df with a boolean `flag_col`
+        - The remaining (unconsumed) ref_dates (as a list of pd.Timestamp)
+      """
+      if date_col not in panel_df.columns or ticker_col not in panel_df.columns:
+        raise ValueError(f"panel_df must contain columns '{ticker_col}' and '{date_col}'.")
+
+      pdf = panel_df.copy()
+      pdf[date_col] = pd.to_datetime(pdf[date_col], errors="coerce")
+      pdf = pdf.dropna(subset=[date_col])
+      #pdf.sort_values([ticker_col, date_col], inplace=True)
+      pdf[flag_col] = False
+
+      ref_dates_sorted = sorted(pd.to_datetime(ref_dates, errors="coerce").dropna().tolist())
+      ptr = 0
+
+      for ticker, gidx in pdf.groupby(ticker_col).groups.items():
+        idxs = list(gidx)
+        dates_series = pdf.loc[idxs, date_col]
+
+        temp_ptr = ptr
+        matched_any = False
+
+        for row_idx, d in zip(idxs, dates_series):
+          while temp_ptr < len(ref_dates_sorted) and ref_dates_sorted[temp_ptr] < d:
+            temp_ptr += 1
+
+          if temp_ptr < len(ref_dates_sorted) and ref_dates_sorted[temp_ptr].date() == d.date():
+            pdf.at[row_idx, flag_col] = True
+            matched_any = True
+            temp_ptr += 1
+
+        if matched_any:
+          ptr = temp_ptr
+
+      remaining_dates = ref_dates_sorted[ptr:]
+      return pdf, remaining_dates
+
+    model_run_final, remaining_dates = flag_and_consume_dates(model_run_final.reset_index(), dates['date'].to_list())
+    print(model_run_final, remaining_dates)
+
+  model_run_final.to_excel('df_for_models_debug.xlsx', index=False)
 
   formulas = [
       'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + EntityEffects',
@@ -374,7 +467,9 @@ def run_regressions(model_run: tuple[pd.DataFrame, pd.DataFrame]) -> None:
   for formula in formulas:
     model = lm.PanelOLS.from_formula(formula, data=model_run_final,
                                      check_rank=False, drop_absorbed=True)
-    results.append(model.fit(cov_type='clustered', cluster_entity=True))
+    model_result = model.fit(cov_type='clustered', cluster_entity=True)
+    print(model_result)
+    results.append(model_result)
 
   report = Stargazer(results)
   REPORT_PATH.write_text(report.render_html())
