@@ -21,12 +21,30 @@ REPORT_SURPRISE_PATH = BASE_DIR / "Report_surprise.html"
 R_RESULTS_DIR = BASE_DIR / "R_results"
 ORIGINAL_PANEL = False
 
-R_DEFAULT_FORMULA = (
-  "ar ~ const + dividends + volume + market_cap + surprise_percent + "
-  "positive_label_1 + negative_label_1 + positive_label_0 + negative_label_0 + "
-  "surprise_percent * positive_label_1 + surprise_percent * negative_label_1 + "
-  "surprise_percent * positive_label_0 + surprise_percent * negative_label_0 - surprise_percent + EntityEffects"
-)
+R_DEFAULT_FORMULAS = [
+  (
+    "ar ~ const + dividends + volume + market_cap + surprise_percent + "
+    "positive_label_1 + negative_label_1 + positive_label_0 + negative_label_0 + "
+    "surprise_percent * positive_label_1 + surprise_percent * negative_label_1 + "
+    "surprise_percent * positive_label_0 + surprise_percent * negative_label_0 - surprise_percent + EntityEffects"
+  ),
+  (
+    "ar ~ const + dividends + volume + market_cap + surprise_percent + "
+    "positive_label_1 + negative_label_1 + positive_label_0 + negative_label_0 + "
+    "vix_close * positive_label_1 + vix_close * negative_label_1 + "
+    "vix_close * positive_label_0 + vix_close * negative_label_0 +"
+    "surprise_percent * vix_close * positive_label_1 + surprise_percent * vix_close * negative_label_1 + "
+    "surprise_percent * vix_close * positive_label_0 + surprise_percent * vix_close * negative_label_0 - surprise_percent - vix_close  + EntityEffects"
+  )
+]
+
+'''R_GETS_KEEP_TERMS = [
+  "dividends", "volume", "market_cap",
+  "positive_label_1", "negative_label_1",
+  "positive_label_0", "negative_label_0",
+]'''
+R_GETS_KEEP_TERMS = []
+R_GETS_T_PVAL = 0.1
 
 try:
   from r_panel_runner import run_r_panel_regression  # type: ignore
@@ -49,7 +67,7 @@ else:
 
   R_PACKAGE_CHECKER = _missing_r_packages
 
-REQUIRED_R_PACKAGES = ["fixest", "broom"]
+REQUIRED_R_PACKAGES = ["gets"]
 
 def import_stock_data(news_df: pd.DataFrame) -> pd.DataFrame:
   """Download stock data for tickers present in the news dataframe."""
@@ -649,10 +667,25 @@ def main() -> None:
       return
     try:
       panel_for_r = panel_df_ar.reset_index()
-      r_result = run_r_panel_regression(panel_for_r, R_DEFAULT_FORMULA,
-                                        R_RESULTS_DIR, model_name="ar_interactions")
+      r_result = run_r_panel_regression(panel_for_r, R_DEFAULT_FORMULAS,
+                                        R_RESULTS_DIR, model_name="ar_interactions",
+                                        gets_keep=R_GETS_KEEP_TERMS,
+                                        gets_t_pval=R_GETS_T_PVAL)
       print(f"R panel regression artefacts saved to {R_RESULTS_DIR}")
-      print(f"Summary stored at {r_result.summary_path}")
+      for spec_name, paths in r_result.items():
+        gum_sum = paths.gum_summary_path or "N/A"
+        gum_coef = paths.gum_coefficients_path or "N/A"
+        fc_sum = paths.first_cut_summary_path or "N/A"
+        fc_coef = paths.first_cut_coefficients_path or "N/A"
+        gets_sum = paths.gets_summary_path or "N/A"
+        gets_coef = paths.gets_coefficients_path or "N/A"
+        print(f"  Spec {spec_name}:")
+        print(f"    GUM summary -> {gum_sum}")
+        print(f"    GUM coefficients -> {gum_coef}")
+        print(f"    1st cut summary -> {fc_sum}")
+        print(f"    1st cut coefficients -> {fc_coef}")
+        print(f"    GETS summary -> {gets_sum}")
+        print(f"    GETS coefficients -> {gets_coef}")
     except Exception as exc:
       print(f"R regression stage failed: {exc}")
 
