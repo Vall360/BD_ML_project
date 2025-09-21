@@ -460,8 +460,7 @@ def prepare_panel_dataset(
 
   original_panel_v2 = True
   if original_panel_v2:
-    dates = pd.read_excel("extracted_dates.xlsx", parse_dates=True)
-    print(dates)
+    reference_dates = pd.read_excel("extracted_dates.xlsx", parse_dates=True)
 
     def _build_date_groups(ref_dates: Iterable[pd.Timestamp]) -> List[List[pd.Timestamp]]:
       groups: List[List[pd.Timestamp]] = []
@@ -488,11 +487,12 @@ def prepare_panel_dataset(
 
       return groups
 
-    def flag_and_consume_dates(
+    def _assign_reference_dates(
         panel_df: pd.DataFrame,
-        ref_dates: List[pd.Timestamp],
+        ref_groups: List[List[pd.Timestamp]],
         ticker_col: str = "symbol",
         date_col: str = "date",
+        order_col: str = "event_only_index",
         flag_col: str = "ORIG_DATE",
     ) -> Tuple[pd.DataFrame, List[pd.Timestamp]]:
       if ticker_col not in panel_df.columns or date_col not in panel_df.columns:
@@ -501,39 +501,49 @@ def prepare_panel_dataset(
       pdf = panel_df.copy()
       pdf[date_col] = pd.to_datetime(pdf[date_col], errors="coerce")
       pdf[flag_col] = False
-      valid_date_mask = pdf[date_col].notna()
-
-      ref_groups = _build_date_groups(ref_dates)
-      group_idx = 0
 
       ticker_sequence = list(dict.fromkeys(pdf[ticker_col].tolist()))
+      max_groups = min(len(ref_groups), len(ticker_sequence))
+      remaining: List[pd.Timestamp] = []
 
-      for ticker in ticker_sequence:
-        if group_idx >= len(ref_groups):
-          break
-
-        ticker_mask = (pdf[ticker_col] == ticker) & valid_date_mask
-        if not ticker_mask.any():
+      for idx in range(max_groups):
+        ticker = ticker_sequence[idx]
+        target_dates = [dt for dt in ref_groups[idx] if pd.notna(dt)]
+        if not target_dates:
           continue
 
-        current_group = ref_groups[group_idx]
-        group_dates = {d for d in current_group}
+        ticker_mask = pdf[ticker_col] == ticker
+        if not ticker_mask.any():
+          remaining.extend(target_dates)
+          continue
 
-        ticker_dates = pdf.loc[ticker_mask, date_col].dt.normalize()
-        match_mask = ticker_dates.isin(group_dates)
+        ticker_rows = pdf.loc[ticker_mask].sort_values(order_col)
+        assign_count = min(len(target_dates), len(ticker_rows))
+        assign_idx = ticker_rows.index[:assign_count]
+        assigned_dates = [pd.to_datetime(dt).normalize() for dt in target_dates[:assign_count]]
 
-        if match_mask.any():
-          pdf.loc[ticker_mask, flag_col] = match_mask.values
-          group_idx += 1
+        pdf.loc[assign_idx, date_col] = assigned_dates
+        pdf.loc[assign_idx, flag_col] = True
 
-      remaining = [dt for grp in ref_groups[group_idx:] for dt in grp]
+        if assign_count < len(target_dates):
+          remaining.extend(target_dates[assign_count:])
+
+      if len(ref_groups) > len(ticker_sequence):
+        for group in ref_groups[max_groups:]:
+          remaining.extend(group)
+
       return pdf, remaining
 
-    model_run_final, remaining_dates = flag_and_consume_dates(
+    date_groups = _build_date_groups(reference_dates['date'].to_list())
+    model_run_final, remaining_dates = _assign_reference_dates(
         model_run_final.reset_index(),
-        dates['date'].to_list(),
+        date_groups,
     )
-    print(model_run_final, remaining_dates)
+
+    if remaining_dates:
+      unique_remaining = sorted(set(pd.to_datetime(remaining_dates).tolist()))
+      preview = ", ".join(dt.date().isoformat() for dt in unique_remaining[:5])
+      print(f"Unmapped reference dates ({len(remaining_dates)}): {preview}...")
 
     if event_id_whitelist is None:
       model_run_final = model_run_final[model_run_final['ORIG_DATE']].copy()
