@@ -514,10 +514,11 @@ def run_regressions(model_run: tuple[pd.DataFrame, pd.DataFrame],
       'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + positive_label_0 + EntityEffects',
       'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + negative_label_0 + EntityEffects',
       'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + positive_label_0 + negative_label_0 + EntityEffects',
-      'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + EntityEffects',
-      'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_pos_label_0 + EntityEffects',
-      'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_neg_label_0 + EntityEffects',
-      'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_pos_label_0 + rel_neg_label_0 + EntityEffects'
+      'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + positive_label_0 + negative_label_0 + vix_close * positive_label_1 + vix_close * negative_label_1 + vix_close * positive_label_0 + vix_close * negative_label_0 - vix_close + EntityEffects '
+      ##'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + EntityEffects',
+      ##'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_pos_label_0 + EntityEffects',
+      ##'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_neg_label_0 + EntityEffects',
+      ##'ar ~ const + dividends + volume + market_cap + surprise_percent + rel_pos_label_1 + rel_neg_label_1 + rel_pos_label_0 + rel_neg_label_0 + EntityEffects'
   ]
 
   results = []
@@ -548,7 +549,7 @@ def run_regressions_suprise(model_run: tuple[pd.DataFrame, pd.DataFrame],
       'surprise_percent ~ const + dividends + volume + market_cap + positive_label_1 + negative_label_1 + positive_label_0 + EntityEffects',
       'surprise_percent ~ const + dividends + volume + market_cap + positive_label_1 + negative_label_1 + negative_label_0 + EntityEffects',
       'surprise_percent ~ const + dividends + volume + market_cap + positive_label_1 + negative_label_1 + positive_label_0 + negative_label_0 + EntityEffects',
-      'surprise_percent ~ const + dividends + volume + market_cap + positive_label_1 + negative_label_1 + positive_label_0 + negative_label_0 + VIX_index_avg * positive_label_1 + VIX_index_avg * negative_label_1 + VIX_index_avg * positive_label_0 + VIX_index_avg * negative_label_0 + EntityEffects',
+      'surprise_percent ~ const + dividends + volume + market_cap + positive_label_1 + negative_label_1 + positive_label_0 + negative_label_0 + vix_close * positive_label_1 + vix_close * negative_label_1 + vix_close * positive_label_0 + vix_close * negative_label_0 - vix_close + EntityEffects',
 
       ##'surprise_percent ~ const + dividends + volume + market_cap + rel_pos_label_1 + rel_neg_label_1 + EntityEffects',
       ##'surprise_percent ~ const + dividends + volume + market_cap + rel_pos_label_1 + rel_neg_label_1 + rel_pos_label_0 + EntityEffects',
