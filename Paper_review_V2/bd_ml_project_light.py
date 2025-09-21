@@ -391,66 +391,84 @@ def run_regressions(model_run: tuple[pd.DataFrame, pd.DataFrame]) -> None:
     dates = pd.read_excel("extracted_dates.xlsx", parse_dates=True)
     print(dates)
 
-    from typing import List, Tuple
+    from typing import Iterable, List, Tuple
+
+    def _build_date_groups(ref_dates: Iterable[pd.Timestamp]) -> List[List[pd.Timestamp]]:
+      groups: List[List[pd.Timestamp]] = []
+      current: List[pd.Timestamp] = []
+      prev: pd.Timestamp | None = None
+
+      for raw_date in ref_dates:
+        ts = pd.to_datetime(raw_date, errors="coerce")
+        if pd.isna(ts):
+          continue
+        ts = ts.normalize()
+
+        if prev is not None and ts < prev:
+          if current:
+            groups.append(current)
+          current = [ts]
+        else:
+          current.append(ts)
+
+        prev = ts
+
+      if current:
+        groups.append(current)
+
+      return groups
 
     def flag_and_consume_dates(
-            panel_df: pd.DataFrame,
-            ref_dates: List[pd.Timestamp],
-            ticker_col: str = "symbol",
-            date_col: str = "date",
-            flag_col: str = "ORIG_DATE",
+        panel_df: pd.DataFrame,
+        ref_dates: List[pd.Timestamp],
+        ticker_col: str = "symbol",
+        date_col: str = "date",
+        flag_col: str = "ORIG_DATE",
     ) -> Tuple[pd.DataFrame, List[pd.Timestamp]]:
-      """
-      Iterate over a panel dataframe (by ticker, sorted by date). For each ticker:
-        - Scan the ticker's dates in ascending order.
-        - Maintain a pointer into ref_dates (also ascending).
-        - While scanning, if we see a ref_date < current panel date, we advance a *temp* pointer (these are "earlier dates").
-        - If we encounter matches (panel date == ref_date), we set flag=True for those rows and advance temp pointer.
-        - If a ticker had at least one match, we COMMIT the pointer advance (drop consumed/earlier dates) before moving to the next ticker.
-        - If a ticker had no matches, we DO NOT commit pointer advance; we leave the global pointer unchanged and proceed to the next ticker.
-
-      Returns:
-        - A copy of panel_df with a boolean `flag_col`
-        - The remaining (unconsumed) ref_dates (as a list of pd.Timestamp)
-      """
-      if date_col not in panel_df.columns or ticker_col not in panel_df.columns:
+      if ticker_col not in panel_df.columns or date_col not in panel_df.columns:
         raise ValueError(f"panel_df must contain columns '{ticker_col}' and '{date_col}'.")
 
       pdf = panel_df.copy()
       pdf[date_col] = pd.to_datetime(pdf[date_col], errors="coerce")
-      pdf = pdf.dropna(subset=[date_col])
-      #pdf.sort_values([ticker_col, date_col], inplace=True)
       pdf[flag_col] = False
+      valid_date_mask = pdf[date_col].notna()
 
-      ref_dates_sorted = sorted(pd.to_datetime(ref_dates, errors="coerce").dropna().tolist())
-      ptr = 0
+      ref_groups = _build_date_groups(ref_dates)
+      group_idx = 0
 
-      for ticker, gidx in pdf.groupby(ticker_col).groups.items():
-        idxs = list(gidx)
-        dates_series = pdf.loc[idxs, date_col]
+      ticker_sequence = list(dict.fromkeys(pdf[ticker_col].tolist()))
 
-        temp_ptr = ptr
-        matched_any = False
+      for ticker in ticker_sequence:
+        if group_idx >= len(ref_groups):
+          break
 
-        for row_idx, d in zip(idxs, dates_series):
-          while temp_ptr < len(ref_dates_sorted) and ref_dates_sorted[temp_ptr] < d:
-            temp_ptr += 1
+        ticker_mask = (pdf[ticker_col] == ticker) & valid_date_mask
+        if not ticker_mask.any():
+          continue
 
-          if temp_ptr < len(ref_dates_sorted) and ref_dates_sorted[temp_ptr].date() == d.date():
-            pdf.at[row_idx, flag_col] = True
-            matched_any = True
-            temp_ptr += 1
+        current_group = ref_groups[group_idx]
+        group_dates = {d for d in current_group}
 
-        if matched_any:
-          ptr = temp_ptr
+        ticker_dates = pdf.loc[ticker_mask, date_col].dt.normalize()
+        match_mask = ticker_dates.isin(group_dates)
 
-      remaining_dates = ref_dates_sorted[ptr:]
-      return pdf, remaining_dates
+        if match_mask.any():
+          pdf.loc[ticker_mask, flag_col] = match_mask.values
+          group_idx += 1
+
+      remaining = [dt for grp in ref_groups[group_idx:] for dt in grp]
+      return pdf, remaining
 
     model_run_final, remaining_dates = flag_and_consume_dates(model_run_final.reset_index(), dates['date'].to_list())
     print(model_run_final, remaining_dates)
 
+
   model_run_final.to_excel('df_for_models_debug.xlsx', index=False)
+
+  if ORIGINAL_PANEL_V2:
+    model_run_final = pd.DataFrame(model_run_final)
+    model_run_final = model_run_final[model_run_final['ORIG_DATE'] == True].copy()
+    model_run_final = model_run_final.set_index(['symbol', 'Event_only_index'], inplace=True)
 
   formulas = [
       'ar ~ const + dividends + volume + market_cap + surprise_percent + positive_label_1 + negative_label_1 + EntityEffects',
