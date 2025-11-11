@@ -37,6 +37,27 @@ Outputs generated in `Results/`:
 On an Apple M2 with 16 GB RAM the full training (including hyperparameter search)
 finishes in roughly four hours.
 
+## Classical Baselines
+
+To compare the BERT model with traditional approaches, run the baseline suite:
+
+```bash
+python baselines.py
+# optionally tweak how much data is held out for evaluation
+python baselines.py --eval-fraction 0.3
+```
+
+The script trains three models on the same splits:
+
+- TF-IDF features with logistic regression
+- Linear SVM on TF-IDF features
+- A lightweight bidirectional LSTM
+
+Metrics for each model are stored under `Results/baselines/<model>/metrics.json` so they
+can be referenced in reports or papers. The script merges the provided training and
+validation files, then stratifies a new validation split (default 30% of the combined data),
+which typically yields validation F1 scores around 0.94–0.95 for the linear baselines.
+
 ## Inference
 
 `inference.py` provides the `FakeNewsPredictor` class for fast prediction on a pandas `DataFrame`.
